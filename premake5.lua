@@ -19,16 +19,10 @@ project "ImGui"
         "imstb_textedit.h",
         "imstb_truetype.h",
         "imgui_demo.cpp",
-
-        "backends/imgui_impl_sdlrenderer2.h",
-        "backends/imgui_impl_sdlrenderer2.cpp",
-        "backends/imgui_impl_sdl2.h",
-        "backends/imgui_impl_sdl2.cpp"
     }
 
     includedirs {
         "%{prj.location}",
-        "%{IncludeDir.SDL2}"
     }
 
     filter "system:windows"

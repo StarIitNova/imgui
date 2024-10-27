@@ -370,6 +370,13 @@ bool ImGui_ImplSDL3_ProcessEvent(const SDL_Event* event)
             io.AddInputCharactersUTF8(event->text.text);
             return true;
         }
+        case SDL_EVENT_TEXT_EDITING:
+        {
+            if (ImGui_ImplSDL3_GetViewportForWindowID(event->edit.windowID) == NULL)
+                return false;
+            io.SetTextCompositionData(event->edit.start, event->edit.length, event->edit.text);
+            return true;
+        }
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
         {

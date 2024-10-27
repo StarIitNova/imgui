@@ -1524,6 +1524,19 @@ void ImGuiIO::AddInputCharactersUTF8(const char* utf8_chars)
     }
 }
 
+#ifndef IMGUI_NVA_NO_IME
+// sets the composition data
+void ImGuiIO::SetTextCompositionData(int start, int length, const char *text)
+{
+    if (!AppAcceptingEvents)
+        return;
+
+    CompositionData = text; // implicit copy
+    CompositionCursorStart = start;
+    CompositionCursorLength = length;
+}
+#endif
+
 // Clear all incoming events.
 void ImGuiIO::ClearEventsQueue()
 {

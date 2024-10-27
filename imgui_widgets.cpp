@@ -5137,9 +5137,18 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
         // - Measure text height (for scrollbar)
         // We are attempting to do most of that in **one main pass** to minimize the computation cost (non-negligible for large amount of text) + 2nd pass for selection rendering (we could merge them by an extra refactoring effort)
         // FIXME: This should occur on buf_display but we'd need to maintain cursor/select_start/select_end for UTF-8.
+#ifndef IMGUI_NVA_NO_IME
+        std::string composed_text = std::string(state->TextA.Data, state->CurLenA);
+        composed_text.insert(state->Stb->cursor, io.CompositionData);
+        const char* text_begin = composed_text.c_str();
+        const char* text_end = text_begin + composed_text.length();
+        buf_display = text_begin;
+        buf_display_end = text_end;
+#else
         const char* text_begin = state->TextA.Data;
         const char* text_end = text_begin + state->CurLenA;
-        ImVec2 cursor_offset, select_start_offset;
+#endif
+        ImVec2 base_cursor_offset, cursor_offset, select_start_offset;
 
         {
             // Find lines numbers straddling cursor and selection min position
@@ -5165,8 +5174,39 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
                 selmin_line_no = line_count;
 
             // Calculate 2d position by finding the beginning of the line and measuring distance
-            cursor_offset.x = InputTextCalcTextSize(&g, ImStrbol(cursor_ptr, text_begin), cursor_ptr).x;
-            cursor_offset.y = cursor_line_no * g.FontSize;
+            float ex_cursor_offset = 0.0f;
+            // int ex_ptr_offset = 0;
+#ifndef IMGUI_NVA_NO_IME
+            // ex_cursor_offset = InputTextCalcTextSize(&g, io.CompositionData.c_str(), io.CompositionData.c_str() + io.CompositionCursorStart + io.CompositionCursorLength).x;
+            // ex_ptr_offset = io.CompositionCursorStart;
+            size_t char_index = 0;
+            size_t str_index = 0;
+            while (str_index < io.CompositionData.size()) {
+                if ((io.CompositionData[str_index] & 0x80) == 0) {
+                    str_index += 1;
+                } else if ((io.CompositionData[str_index] & 0xE0) == 0xC0) {
+                    if (str_index + 1 >= io.CompositionData.size()) break;
+                    str_index += 2;
+                } else if ((io.CompositionData[str_index] & 0xF0) == 0xE0) {
+                    if (str_index + 2 >= io.CompositionData.size()) break;
+                    str_index += 3;
+                } else {
+                    str_index += 1; // probably an invisible character
+                    continue;
+                }
+
+                char_index++;
+                if (char_index == io.CompositionCursorStart) {
+                    break;
+                }
+            }
+
+            ex_cursor_offset = CalcTextSize(io.CompositionData.c_str(), io.CompositionData.c_str() + str_index).x;
+#endif
+            base_cursor_offset.x = InputTextCalcTextSize(&g, ImStrbol(cursor_ptr, text_begin), cursor_ptr).x;
+            base_cursor_offset.y = cursor_line_no * g.FontSize;
+            cursor_offset = base_cursor_offset;
+            cursor_offset.x += ex_cursor_offset;
             if (selmin_line_no >= 0)
             {
                 select_start_offset.x = InputTextCalcTextSize(&g, ImStrbol(selmin_ptr, text_begin), selmin_ptr).x;
@@ -5174,6 +5214,7 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             }
 
             // Store text height (note that we haven't calculated text width at all, see GitHub issues #383, #1224)
+
             if (is_multiline)
                 text_size = ImVec2(inner_size.x, line_count * g.FontSize);
         }
@@ -5215,10 +5256,22 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
 
         // Draw selection
         const ImVec2 draw_scroll = ImVec2(state->Scroll.x, 0.0f);
-        if (render_selection)
+
+        bool composition_draws = false;
+#ifndef IMGUI_NVA_NO_IME
+        composition_draws = io.CompositionCursorLength > 0 && io.CompositionCursorStart >= 0 && io.CompositionData.length() > 0;
+#endif
+
+        if (render_selection || composition_draws)
         {
             const char* text_selected_begin = text_begin + ImMin(state->Stb->select_start, state->Stb->select_end);
             const char* text_selected_end = text_begin + ImMax(state->Stb->select_start, state->Stb->select_end);
+#ifndef IMGUI_NVA_NO_IME
+            if (composition_draws) {
+                text_selected_begin = text_begin + state->Stb->cursor + io.CompositionCursorStart;
+                text_selected_end = text_selected_begin + io.CompositionCursorLength;
+            }
+#endif
 
             ImU32 bg_color = GetColorU32(ImGuiCol_TextSelectedBg, render_cursor ? 1.0f : 0.6f); // FIXME: current code flow mandate that render_cursor is always true here, we are leaving the transparent one for tests.
             float bg_offy_up = is_multiline ? 0.0f : -1.0f;    // FIXME: those offsets should be part of the style? they don't play so well with multi-line selection.
@@ -5254,6 +5307,22 @@ bool ImGui::InputTextEx(const char* label, const char* hint, char* buf, int buf_
             ImU32 col = GetColorU32(is_displaying_hint ? ImGuiCol_TextDisabled : ImGuiCol_Text);
             draw_window->DrawList->AddText(g.Font, g.FontSize, draw_pos - draw_scroll, col, buf_display, buf_display_end, 0.0f, is_multiline ? NULL : &clip_rect);
         }
+
+#ifndef IMGUI_NVA_NO_IME
+        // Draw composition underline
+        if (io.CompositionData.length() > 0) {
+            float comp_len = CalcTextSize(io.CompositionData.c_str(), io.CompositionData.c_str() + io.CompositionData.length()).x;
+            ImVec2 comp_start = ImTrunc(draw_pos + base_cursor_offset - draw_scroll);
+            float comp_start_x = comp_start.x;
+            float comp_end_x = comp_start_x + comp_len;
+            float comp_line_y = comp_start.y;
+
+            while (comp_start_x < comp_end_x) {
+                draw_window->DrawList->AddCircleFilled(ImVec2(comp_start_x, comp_line_y), 1.0f, IM_COL32(200, 200, 255, 255));
+                comp_start_x += 2.0f + 2.0f;
+            }
+        }
+#endif
 
         // Draw blinking cursor
         if (render_cursor)
